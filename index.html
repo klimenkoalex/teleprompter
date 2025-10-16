@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Телесуфлёр — failsafe (точные значения)</title>
+<title>Телесуфлёр — failsafe + mic (фикс ввода)</title>
 <style>
   :root{ --bg:#000; --fg:#f3f3f3; --muted:#9aa0a6; --accent:#22c55e; }
   *{ box-sizing:border-box }
@@ -21,18 +21,21 @@
     font:inherit; -moz-appearance:textfield;
   }
   input[type="number"]::-webkit-outer-spin-button,
-  input[type="number"]::-webkit-inner-spin-button{ -webkit-appearance: none; margin: 0; }
-  button{ font:inherit; background:#111; color:var(--fg); border:1px solid #333; padding:.5rem .75rem; border-radius:.6rem; }
+  input[type="number"]::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+  button{ font:inherit; background:#111; color:#fff; border:1px solid #333; padding:.5rem .75rem; border-radius:.6rem; }
   button.primary{ background:var(--accent); color:#052b13; border-color:#1daa56 }
+  button[disabled]{ opacity:.6; pointer-events:none }
   .viewer{ position:relative; flex:1; overflow:hidden; border-top:1px solid #222 }
   .mirror{ transform:scaleX(-1) }
   .script{ position:absolute; left:8vw; right:8vw; top:8rem; line-height:1.8; font-size:84px; will-change:transform; transform:translateY(0) }
+  .word{ padding:.04em .02em; border-radius:.15em }
+  .current{ background:rgba(34,197,94,.22); outline:2px solid rgba(34,197,94,.55) }
   .reading .toolbar, .reading .editor{ display:none!important }
   .reading .viewer{ height:100dvh }
   .editor{ padding:.5rem .75rem; background:#0b0b0b; border-top:1px solid #222 }
   textarea{ width:100%; min-height:26dvh; background:#0c0c0c; color:var(--fg); border:1px solid #333; border-radius:.6rem; padding:.75rem; line-height:1.6 }
   .hint{ color:#bbb; font-size:.85rem }
-  .pill{ padding:.25rem .5rem; border:1px solid #2a2a2a; border-radius:.5rem; color:#ddd }
+  .pill{ padding:.25rem .5rem; border:1px solid #2a2a2a; border-radius:.6rem; color:#ddd }
 </style>
 </head>
 <body>
@@ -45,13 +48,11 @@
       <button id="btnRead">Чтение</button>
     </div>
     <div class="group">
-      <label>Размер (1–100)
-        <input type="number" id="fontVal" min="1" max="100" value="70" inputmode="numeric">
-      </label>
-      <label>Скорость (1–100)
-        <input type="number" id="speedVal" min="1" max="100" value="50" inputmode="numeric">
-      </label>
+      <label>Размер (1–100) <input type="number" id="fontVal" min="1" max="100" value="70" inputmode="numeric" placeholder="1–100"></label>
+      <label>Скорость (1–100) <input type="number" id="speedVal" min="1" max="100" value="50" inputmode="numeric" placeholder="1–100"></label>
       <label><input type="checkbox" id="chkMirror"> Зеркало</label>
+      <label><input type="checkbox" id="chkFollow"> Следить за речью</label>
+      <button id="btnMic">🎤 Микрофон</button>
     </div>
     <div class="group"><span class="pill" id="status">Готово</span></div>
   </div>
@@ -62,7 +63,7 @@
 
   <div class="editor">
     <textarea id="src" placeholder="Вставь текст → «Загрузить текст». Потом «Старт». Пустые строки — паузы."></textarea>
-    <div class="hint">Вводишь точные значения 1–100: размер и скорость мэппятся в пиксели. Движение — через CSS transform (летает на iOS).</div>
+    <div class="hint">🎤 работает только в Safari (iOS). В Chrome iOS — только автопрокрутка по скорости.</div>
   </div>
 </div>
 
@@ -71,95 +72,186 @@
   const $=s=>document.querySelector(s);
   const viewer=$('#viewer'), script=$('#script'), src=$('#src');
   const btnLoad=$('#btnLoad'), btnPlay=$('#btnPlay'), btnReset=$('#btnReset'), btnRead=$('#btnRead');
-  const fontVal=$('#fontVal'), speedVal=$('#speedVal'), chkMirror=$('#chkMirror'), statusEl=$('#status');
+  const fontVal=$('#fontVal'), speedVal=$('#speedVal'), chkMirror=$('#chkMirror'), chkFollow=$('#chkFollow');
+  const statusEl=$('#status'), btnMic=$('#btnMic');
 
-  // Диапазоны мэппинга (правь на вкус)
-  const FONT_MIN=24, FONT_MAX=120;       // px
-  const SPEED_MIN=10, SPEED_MAX=300;     // px/s
+  // Диапазоны маппинга 1..100
+  const FONT_MIN=24, FONT_MAX=120;      // px
+  const SPEED_MIN=10, SPEED_MAX=300;    // px/s
 
   // Состояние
-  let playing=false, last=0, offset=0, speedPxPerSec=map100(speedVal.value, SPEED_MIN, SPEED_MAX);
+  let playing=false, last=0, offset=0;
+  let words=[], spans=[], currentWord=0;
+  let recognition=null, recogOn=false, tail=[];
+  let lastFont100=70, lastSpeed100=50; // последние валидные значения 1..100
+  const TAIL=6, LOOKAHEAD=60;
 
-  function map100(v, min, max){
-    const n = Math.max(1, Math.min(100, Number(v)||1));
-    return min + (max - min) * (n - 1) / 99; // чтобы 1→min и 100→max
-  }
-  function applyFont(){
-    const px = Math.round(map100(fontVal.value, FONT_MIN, FONT_MAX));
-    script.style.fontSize = px + 'px';
-    status('Размер: ' + px + 'px');
-    localStorage.setItem('tp_font100', String(fontVal.value));
-  }
-  function applySpeed(){
-    speedPxPerSec = map100(speedVal.value, SPEED_MIN, SPEED_MAX);
-    status('Скорость: ' + Math.round(speedPxPerSec) + ' px/c');
-    localStorage.setItem('tp_speed100', String(speedVal.value));
-  }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  if(!SR){ btnMic.disabled=true; note('Микрофон недоступен в этом браузере'); }
 
+  function map100(n, min, max){ return min + (max - min) * (n - 1) / 99; }
+
+  // ----- текст и движение (translateY) -----
   function render(text){
-    script.style.transform='translateY(0)';
-    offset=0;
-    script.textContent = text || 'Добавь текста побольше, чем один экран 🙂';
+    script.style.transform='translateY(0)'; offset=0; currentWord=0;
+    words=[]; spans=[]; script.innerHTML='';
+    const toks = splitTokens(text || 'Добавь текста побольше, чем один экран 🙂');
+    const frag=document.createDocumentFragment();
+    toks.forEach(tok=>{
+      if(/^[\p{L}\p{N}’'\-]+$/u.test(tok)){
+        const span=document.createElement('span'); span.className='word'; span.textContent=tok;
+        spans.push(span); words.push(norm(tok)); frag.appendChild(span);
+      } else frag.appendChild(document.createTextNode(tok));
+    });
+    script.appendChild(frag); highlight();
   }
-
   function loop(ts){
     if(!playing){ last=0; return; }
     if(!last) last=ts;
     const dt=(ts-last)/1000; last=ts;
-    offset += speedPxPerSec * dt;
-    script.style.transform = `translateY(${-offset}px)`;
+    // если включено следование и реально работает микрофон — не двигаем сами
+    if(!(chkFollow.checked && recogOn)){
+      const speedPxPerSec = map100(lastSpeed100, SPEED_MIN, SPEED_MAX);
+      offset += speedPxPerSec * dt;
+      applyOffset();
+    }
     requestAnimationFrame(loop);
   }
+  function applyOffset(){ script.style.transform = `translateY(${-offset}px)`; }
 
-  function status(s){ statusEl.textContent = s; }
+  // ----- подсветка и якорение по речи -----
+  function highlight(){ spans.forEach((s,i)=> s.classList.toggle('current', i===currentWord)); }
+  function scrollToWord(i){
+    i=Math.max(0, Math.min(i, spans.length-1)); currentWord=i; highlight();
+    const vr=viewer.getBoundingClientRect(); const rect=spans[i].getBoundingClientRect();
+    const target = vr.top + vr.height*0.45;
+    const delta = rect.top - target;
+    offset += delta; applyOffset();
+  }
+  function initSR(){
+    if(!SR) return null;
+    const r=new SR(); r.continuous=true; r.interimResults=true; r.lang='ru-RU';
+    r.onresult=(ev)=>{
+      let final=''; for(let i=ev.resultIndex;i<ev.results.length;i++){ const res=ev.results[i]; if(res.isFinal) final+=' '+res[0].transcript; }
+      if(final) handleTranscript(final);
+    };
+    r.onend=()=>{ if(recogOn){ try{ r.start(); }catch(e){} } };
+    r.onerror=(e)=> note('Ошибка речи: '+(e.error||'unknown'));
+    return r;
+  }
+  function handleTranscript(text){
+    const toks=norm(text).split(' ').filter(Boolean);
+    tail.push(...toks); if(tail.length>TAIL) tail=tail.slice(-TAIL);
+    for(let k=Math.min(TAIL,5); k>=2; k--){
+      const sub = tail.slice(-k);
+      const pos = findSubseq(words, sub, currentWord, LOOKAHEAD);
+      if(pos>=0){ scrollToWord(pos+k); note('Синхрон ✓'); return; }
+    }
+    const last = tail[tail.length-1];
+    if(last){ for(let i=currentWord; i<Math.min(words.length, currentWord+10); i++){ if(words[i]===last){ scrollToWord(i+1); note('Синхрон по слову ✓'); return; } } }
+  }
+  function findSubseq(arr, sub, start, lookahead){
+    const end=Math.min(arr.length - sub.length, start + lookahead);
+    for(let i=start;i<=end;i++){ if(arr[i]!==sub[0]) continue; let ok=true; for(let j=1;j<sub.length;j++){ if(arr[i+j]!==sub[j]){ ok=false; break; } } if(ok) return i; }
+    return -1;
+  }
 
+  // ----- утилиты -----
+  function splitTokens(text){
+    const tokens=[]; const re=/[\p{L}\p{N}’'\-]+|[^\s\p{L}\p{N}]/gu; let m,i=0;
+    while(m=re.exec(text)){ if(m.index>i) tokens.push(text.slice(i,m.index)); tokens.push(m[0]); i=re.lastIndex }
+    if(i<text.length) tokens.push(text.slice(i)); return tokens;
+  }
+  const norm = s => (s||"").toLowerCase().replaceAll('ё','е').replace(/[^\p{L}\p{N}'’\- ]+/gu,' ').replace(/\s+/g,' ').trim();
+  function note(s){ statusEl.textContent=s; }
+
+  // ----- управление -----
   btnLoad.onclick=()=>{
     const t = src.value.trim();
     if(!t){ alert('Вставь текст ниже.'); return; }
     render(t);
     localStorage.setItem('tp_script_simple', t);
-    status('Текст загружен');
+    note('Текст загружен');
   };
-
-  btnPlay.onclick=()=>{
-    playing=!playing;
-    btnPlay.textContent = playing ? 'Пауза' : 'Старт';
-    if(playing){ document.body.classList.add('reading'); requestAnimationFrame(loop); status('Идёт прокрутка'); }
-    else status('Пауза');
-  };
-
-  btnReset.onclick=()=>{
-    playing=false; btnPlay.textContent='Старт';
-    offset=0; script.style.transform='translateY(0)'; status('В начало');
-  };
-
+  btnPlay.onclick=()=>{ playing = !playing; btnPlay.textContent = playing ? 'Пауза' : 'Старт'; if(playing){ document.body.classList.add('reading'); requestAnimationFrame(loop); note('Идёт прокрутка'); } else note('Пауза'); };
+  btnReset.onclick=()=>{ playing=false; btnPlay.textContent='Старт'; offset=0; applyOffset(); currentWord=0; highlight(); note('В начало'); };
   btnRead.onclick=()=> document.body.classList.toggle('reading');
-
-  // Обработчики ввода (с применением по мере набора)
-  function clampInput(el){
-    let v = Number(el.value||'1');
-    if(v<1) v=1; if(v>100) v=100;
-    el.value = String(Math.round(v));
-  }
-  fontVal.addEventListener('input', ()=>{ clampInput(fontVal); applyFont(); });
-  speedVal.addEventListener('input', ()=>{ clampInput(speedVal); applySpeed(); });
-  fontVal.addEventListener('blur', ()=>{ clampInput(fontVal); applyFont(); });
-  speedVal.addEventListener('blur', ()=>{ clampInput(speedVal); applySpeed(); });
-
   chkMirror.onchange=()=> viewer.classList.toggle('mirror', chkMirror.checked);
 
-  // Восстановление
+  // ВВОД 1–100 БЕЗ САМОСРАБАТЫВАЮЩЕЙ ЗАЖИМКИ:
+  // — можно очистить поле (''), цифры вводятся свободно;
+  // — применяем как только введено валидное 1..100;
+  // — на blur пустое поле откатываем к прошлому валидному.
+  function onFontInput(){
+    const raw = fontVal.value.trim();
+    if(raw===''){ note('Размер: …'); return; }              // временно пусто — не трогаем
+    const n = Number(raw);
+    if(Number.isInteger(n) && n>=1 && n<=100){
+      lastFont100 = n;
+      script.style.fontSize = Math.round(map100(lastFont100, FONT_MIN, FONT_MAX)) + 'px';
+      localStorage.setItem('tp_font100', String(lastFont100));
+      note('Размер: ' + lastFont100 + ' (применён)');
+    } // иначе — просто ждём следующего ввода
+  }
+  function onFontBlur(){
+    let raw = fontVal.value.trim();
+    if(raw===''){ fontVal.value = String(lastFont100); onFontInput(); return; }
+    let n = Number(raw);
+    if(!Number.isInteger(n)) n = lastFont100;
+    if(n<1) n=1; if(n>100) n=100;
+    fontVal.value = String(n);
+    onFontInput();
+  }
+  function onSpeedInput(){
+    const raw = speedVal.value.trim();
+    if(raw===''){ note('Скорость: …'); return; }
+    const n = Number(raw);
+    if(Number.isInteger(n) && n>=1 && n<=100){
+      lastSpeed100 = n;
+      localStorage.setItem('tp_speed100', String(lastSpeed100));
+      note('Скорость: ' + lastSpeed100 + ' (применена)');
+    }
+  }
+  function onSpeedBlur(){
+    let raw = speedVal.value.trim();
+    if(raw===''){ speedVal.value = String(lastSpeed100); onSpeedInput(); return; }
+    let n = Number(raw);
+    if(!Number.isInteger(n)) n = lastSpeed100;
+    if(n<1) n=1; if(n>100) n=100;
+    speedVal.value = String(n);
+    onSpeedInput();
+  }
+  fontVal.addEventListener('input', onFontInput);
+  fontVal.addEventListener('blur', onFontBlur);
+  speedVal.addEventListener('input', onSpeedInput);
+  speedVal.addEventListener('blur', onSpeedBlur);
+
+  btnMic.onclick=()=>{
+    if(!SR){ note('В этом браузере SR нет'); return; }
+    if(!recognition) recognition = initSR();
+    if(!recogOn){
+      try{ recognition.start(); recogOn=true; btnMic.classList.add('primary'); note('Микрофон включён'); }
+      catch(e){ note('Не удалось запустить распознавание'); }
+    } else {
+      try{ recognition.stop(); }catch(e){}
+      recogOn=false; btnMic.classList.remove('primary'); note('Микрофон выключен');
+    }
+  };
+
+  // ----- восстановление -----
   (function(){
-    const savedT = localStorage.getItem('tp_script_simple');
-    if(savedT){ src.value=savedT; render(savedT); }
-    const f100 = localStorage.getItem('tp_font100'); if(f100){ fontVal.value = f100; }
-    const s100 = localStorage.getItem('tp_speed100'); if(s100){ speedVal.value = s100; }
-    applyFont(); applySpeed();
+    const savedT=localStorage.getItem('tp_script_simple'); if(savedT){ src.value=savedT; render(savedT); }
+    const f100=Number(localStorage.getItem('tp_font100')); if(Number.isInteger(f100) && f100>=1 && f100<=100){ lastFont100=f100; }
+    const s100=Number(localStorage.getItem('tp_speed100')); if(Number.isInteger(s100) && s100>=1 && s100<=100){ lastSpeed100=s100; }
+    fontVal.value = String(lastFont100); speedVal.value = String(lastSpeed100);
+    // применяем визуально
+    script.style.fontSize = Math.round(map100(lastFont100, FONT_MIN, FONT_MAX)) + 'px';
+    note('Готово');
     if(!src.value){
-      const demo=`Это демо failsafe-режима с вводом 1–100.
-Размер и скорость точные: 1→минимум, 100→максимум.
-Вставь длинный текст, «Загрузить текст», затем «Старт».`;
-      src.value = demo; render(demo);
+      const demo=`Это демо режима с микрофоном (только Safari на iOS). В Chrome iOS речи нет — автопрокрутка по скорости.
+Вставь длинный текст, «Загрузить текст», затем «Старт».
+Размер/скорость вводи 1–100: поле можно очищать, числа из двух/трёх цифр вводятся нормально.`;
+      src.value=demo; render(demo);
     }
   })();
 })();
