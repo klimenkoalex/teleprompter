@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Телесуфлёр — Android VAD + iOS SR</title>
+<title>Телесуфлёр — VAD везде, SR опционально</title>
 <style>
   :root{ --bg:#000; --fg:#f3f3f3; --muted:#9aa0a6; --accent:#22c55e; }
   *{ box-sizing:border-box }
@@ -22,6 +22,9 @@
   }
   input[type="number"]::-webkit-outer-spin-button,
   input[type="number"]::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+  select{
+    background:#0e0e0e; color:#fff; border:1px solid #333; border-radius:.6rem; padding:.45rem .6rem; font:inherit;
+  }
   button{ font:inherit; background:#111; color:#fff; border:1px solid #333; padding:.5rem .75rem; border-radius:.6rem; }
   button.primary{ background:var(--accent); color:#052b13; border-color:#1daa56 }
   button[disabled]{ opacity:.6; pointer-events:none }
@@ -51,8 +54,17 @@
       <label>Размер (1–100) <input type="number" id="fontVal" min="1" max="100" value="70" inputmode="numeric" placeholder="1–100"></label>
       <label>Скорость (1–100) <input type="number" id="speedVal" min="1" max="100" value="50" inputmode="numeric" placeholder="1–100"></label>
       <label><input type="checkbox" id="chkMirror"> Зеркало</label>
-      <label title="Когда включено — автопрокрутка останавливается и ждёт речи (iOS: по словам, Android: по голосовой активности)">
-        <input type="checkbox" id="chkFollow"> Следить за речью
+    </div>
+    <div class="group">
+      <label title="Режим работы микрофона">
+        Микро-режим
+        <select id="micMode">
+          <option value="vad">По голосу (VAD)</option>
+          <option value="sr">По словам (SR)</option>
+        </select>
+      </label>
+      <label title="Останавливать/вести текст от микрофона">
+        <input type="checkbox" id="chkFollow"> Следить по микрофону
       </label>
       <button id="btnMic">🎤 Микрофон</button>
     </div>
@@ -65,7 +77,7 @@
 
   <div class="editor">
     <textarea id="src" placeholder="Вставь текст → «Загрузить текст». Потом «Старт». Пустые строки — паузы."></textarea>
-    <div class="hint">Android Chrome: кнопка 🎤 включает VAD (движение только когда говоришь). iOS Safari: кнопка 🎤 включает распознавание и попадание по словам.</div>
+    <div class="hint">VAD работает и в Safari, и в Chrome. SR (по словам) — только там, где браузер поддерживает SpeechRecognition.</div>
   </div>
 </div>
 
@@ -74,32 +86,51 @@
   const $=s=>document.querySelector(s);
   const viewer=$('#viewer'), script=$('#script'), src=$('#src');
   const btnLoad=$('#btnLoad'), btnPlay=$('#btnPlay'), btnReset=$('#btnReset'), btnRead=$('#btnRead');
-  const fontVal=$('#fontVal'), speedVal=$('#speedVal'), chkMirror=$('#chkMirror'), chkFollow=$('#chkFollow');
+  const fontVal=$('#fontVal'), speedVal=$('#speedVal'), chkMirror=$('#chkMirror');
+  const chkFollow=$('#chkFollow'), micModeSel=$('#micMode');
   const statusEl=$('#status'), btnMic=$('#btnMic');
 
-  // Диапазоны для ввода 1..100
-  const FONT_MIN=24, FONT_MAX=120;      // px
-  const SPEED_MIN=10, SPEED_MAX=300;    // px/s
+  // Диапазоны 1..100
+  const FONT_MIN=24, FONT_MAX=120;     // px
+  const SPEED_MIN=10, SPEED_MAX=300;   // px/s
 
-  // Состояние анимации
+  // Состояния
   let playing=false, last=0, offset=0;
   let words=[], spans=[], currentWord=0;
+  let lastFont100=70, lastSpeed100=50;
 
-  // SR (iOS Safari) и VAD (Android Chrome)
+  // SR и VAD
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  const supportsVAD = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && (window.AudioContext||window.webkitAudioContext));
+  let micMode='vad'; // по умолчанию VAD, как просил
   let recognition=null, recogOn=false, tail=[];
   const TAIL=6, LOOKAHEAD=60;
 
   let audioCtx=null, mediaStream=null, analyser=null, vadOn=false, voiceActive=false, vadRaf=null;
-  // Порог и гистерезис для VAD (под мобильный микрофон)
-  const VAD_ON=0.025, VAD_OFF=0.015; // RMS пороги
-  let lastFont100=70, lastSpeed100=50;
+  const VAD_ON=0.025, VAD_OFF=0.015; // RMS пороги с гистерезисом
+
+  // Инициализация селектора режима
+  (function initMicMode(){
+    // если SR недоступен — выключаем пункт SR
+    if(!SR){ micModeSel.querySelector('option[value="sr"]').disabled = true; }
+    if(!supportsVAD){ micModeSel.querySelector('option[value="vad"]').disabled = true; }
+    // дефолт: VAD, но если VAD недоступен, а SR есть — переключим на SR
+    if(!supportsVAD && SR) micMode='sr';
+    micModeSel.value = micMode;
+    micModeSel.addEventListener('change', ()=>{
+      const next = micModeSel.value;
+      // если режим меняют на лету — выключим текущий микрофон и включим заново при нажатии
+      stopAllMic();
+      micMode = next;
+      note('Режим микрофона: ' + (micMode==='vad'?'VAD':'SR'));
+    });
+  })();
 
   function note(s){ statusEl.textContent=s; }
   function map100(n,min,max){ return min + (max - min) * (n - 1) / 99; }
   const norm = s => (s||"").toLowerCase().replaceAll('ё','е').replace(/[^\p{L}\p{N}'’\- ]+/gu,' ').replace(/\s+/g,' ').trim();
 
-  // Рендер текста (с обёрткой слов для iOS-синхрона)
+  // Рендер текста (с обёрткой слов — вдруг включишь SR)
   function splitTokens(text){
     const tokens=[]; const re=/[\p{L}\p{N}’'\-]+|[^\s\p{L}\p{N}]/gu; let m,i=0;
     while(m=re.exec(text)){ if(m.index>i) tokens.push(text.slice(i,m.index)); tokens.push(m[0]); i=re.lastIndex }
@@ -120,32 +151,33 @@
   }
   function highlight(){ spans.forEach((s,i)=> s.classList.toggle('current', i===currentWord)); }
 
-  // Основной цикл: двигаем через translateY
+  // Главный цикл (translateY)
   function loop(ts){
     if(!playing){ last=0; return; }
     if(!last) last=ts;
     const dt=(ts-last)/1000; last=ts;
 
-    // Если «следить за речью» включено:
-    //  - iOS (SR): когда recogOn — мы НЕ автоскроллим (прыгаем по словам при распознавании)
-    //  - Android (VAD): автоскроллим ТОЛЬКО когда voiceActive
     const follow = chkFollow.checked;
-    const srActive = follow && recogOn && !!SR;
-    const vadActive = follow && vadOn && !SR;
+    const speedPxPerSec = map100(lastSpeed100, SPEED_MIN, SPEED_MAX);
 
-    if (!srActive){
-      const speedPxPerSec = map100(lastSpeed100, SPEED_MIN, SPEED_MAX);
-      const gate = vadActive ? (voiceActive ? 1 : 0) : 1;
-      if (gate>0){
-        offset += speedPxPerSec * dt * gate;
-        applyOffset();
-      }
+    // Гейт: если follow включен
+    //  - режим SR и SR активен: автоскролл НЕ идёт (прыгаем по словам)
+    //  - режим VAD и VAD активен: автоскролл идёт, только когда voiceActive
+    let gate=1;
+    if(follow){
+      if(micMode==='sr' && recogOn) gate=0;
+      if(micMode==='vad' && vadOn) gate = voiceActive ? 1 : 0;
+    }
+
+    if(gate>0){
+      offset += speedPxPerSec * dt * gate;
+      applyOffset();
     }
     requestAnimationFrame(loop);
   }
   function applyOffset(){ script.style.transform=`translateY(${-offset}px)`; }
 
-  // ---- SpeechRecognition (iOS Safari) ----
+  // SR (по словам)
   function initSR(){
     if(!SR) return null;
     const r=new SR(); r.continuous=true; r.interimResults=true; r.lang='ru-RU';
@@ -154,7 +186,7 @@
       if(final) handleTranscript(final);
     };
     r.onend=()=>{ if(recogOn){ try{ r.start(); }catch(e){} } };
-    r.onerror=(e)=> note('Ошибка речи: '+(e.error||'unknown'));
+    r.onerror=(e)=> note('Ошибка SR: '+(e.error||'unknown'));
     return r;
   }
   function handleTranscript(text){
@@ -163,7 +195,7 @@
     for(let k=Math.min(TAIL,5); k>=2; k--){
       const sub=tail.slice(-k);
       const pos=findSubseq(words, sub, currentWord, LOOKAHEAD);
-      if(pos>=0){ scrollToWord(pos+k); note('Синхрон ✓'); return; }
+      if(pos>=0){ scrollToWord(pos+k); note('Синхрон по словам ✓'); return; }
     }
     const last = tail[tail.length-1];
     if(last){ for(let i=currentWord;i<Math.min(words.length,currentWord+10);i++){ if(words[i]===last){ scrollToWord(i+1); note('Синхрон по слову ✓'); return; } } }
@@ -180,21 +212,19 @@
     offset += delta; applyOffset();
   }
 
-  // ---- VAD (Android Chrome) через WebAudio ----
+  // VAD (по голосовой активности)
   async function startVAD(){
     if(vadOn) return;
+    if(!supportsVAD){ note('VAD недоступен'); return; }
     try{
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      mediaStream = await navigator.mediaDevices.getUserMedia({audio:{
-        echoCancellation:true, noiseSuppression:true, autoGainControl:true
-      }});
-      const source = audioCtx.createMediaStreamSource(mediaStream);
+      const stream = await navigator.mediaDevices.getUserMedia({audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }});
+      mediaStream = stream;
+      const source = audioCtx.createMediaStreamSource(stream);
       analyser = audioCtx.createAnalyser();
       analyser.fftSize = 2048;
       source.connect(analyser);
-      vadOn = true;
-      btnMic.classList.add('primary');
-      note('Микрофон (VAD) включён');
+      vadOn=true; btnMic.classList.add('primary'); note('Микрофон (VAD) включён');
       runVAD();
     }catch(e){
       note('Нет доступа к микрофону (нужно https и разрешение)');
@@ -212,14 +242,12 @@
   function runVAD(){
     const buf = new Uint8Array(analyser.fftSize);
     let smooth = 0;
-    const tick = ()=>{
+    const tick=()=>{
       if(!vadOn) return;
       analyser.getByteTimeDomainData(buf);
-      // RMS
       let sum=0;
       for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum += v*v; }
       const rms = Math.sqrt(sum/buf.length);
-      // сглаживание и гистерезис
       smooth = smooth*0.9 + rms*0.1;
       if(!voiceActive && smooth>VAD_ON) voiceActive=true;
       else if(voiceActive && smooth<VAD_OFF) voiceActive=false;
@@ -228,15 +256,13 @@
     tick();
   }
 
-  // ---- Управление ----
+  // Управление
   function applyFontNow(){ script.style.fontSize = Math.round(map100(lastFont100, FONT_MIN, FONT_MAX)) + 'px'; }
   function onFontInput(){
-    const raw = fontVal.value.trim();
-    if(raw===''){ note('Размер: …'); return; }
-    const n = Number(raw);
+    const raw=fontVal.value.trim(); if(raw===''){ note('Размер: …'); return; }
+    const n=Number(raw);
     if(Number.isInteger(n) && n>=1 && n<=100){
-      lastFont100 = n; applyFontNow();
-      localStorage.setItem('tp_font100', String(lastFont100));
+      lastFont100=n; applyFontNow(); localStorage.setItem('tp_font100', String(lastFont100));
       note('Размер: '+lastFont100+' (применён)');
     }
   }
@@ -247,12 +273,10 @@
     if(n<1)n=1; if(n>100)n=100; fontVal.value=String(n); onFontInput();
   }
   function onSpeedInput(){
-    const raw = speedVal.value.trim();
-    if(raw===''){ note('Скорость: …'); return; }
-    const n = Number(raw);
+    const raw=speedVal.value.trim(); if(raw===''){ note('Скорость: …'); return; }
+    const n=Number(raw);
     if(Number.isInteger(n) && n>=1 && n<=100){
-      lastSpeed100 = n;
-      localStorage.setItem('tp_speed100', String(lastSpeed100));
+      lastSpeed100=n; localStorage.setItem('tp_speed100', String(lastSpeed100));
       note('Скорость: '+lastSpeed100+' (применена)');
     }
   }
@@ -263,30 +287,28 @@
     if(n<1)n=1; if(n>100)n=100; speedVal.value=String(n); onSpeedInput();
   }
 
-  btnLoad.onclick=()=>{
-    const t=src.value.trim(); if(!t){ alert('Вставь текст ниже.'); return; }
-    render(t); localStorage.setItem('tp_script_simple', t); note('Текст загружен');
-  };
-  btnPlay.onclick=()=>{ playing=!playing; btnPlay.textContent = playing ? 'Пауза' : 'Старт'; if(playing){ document.body.classList.add('reading'); requestAnimationFrame(loop); note('Идёт прокрутка'); } else note('Пауза'); };
+  btnLoad.onclick=()=>{ const t=src.value.trim(); if(!t){ alert('Вставь текст ниже.'); return; }
+    render(t); localStorage.setItem('tp_script_simple', t); note('Текст загружен'); };
+  btnPlay.onclick=()=>{ playing=!playing; btnPlay.textContent=playing?'Пауза':'Старт';
+    if(playing){ document.body.classList.add('reading'); requestAnimationFrame(loop); note('Идёт прокрутка'); } else note('Пауза'); };
   btnReset.onclick=()=>{ playing=false; btnPlay.textContent='Старт'; offset=0; applyOffset(); currentWord=0; highlight(); note('В начало'); };
   btnRead.onclick=()=> document.body.classList.toggle('reading');
   chkMirror.onchange=()=> viewer.classList.toggle('mirror', chkMirror.checked);
 
   btnMic.onclick=()=>{
-    // Если есть SR — работаем как распознавалка (iOS Safari)
-    if(SR){
+    // если включён SR-режим и SR доступен — используем SR; иначе — VAD
+    if(micMode==='sr' && SR){
       if(!recognition) recognition = initSR();
       if(!recogOn){
         try{ recognition.start(); recogOn=true; btnMic.classList.add('primary'); note('Микрофон (SR) включён'); }
-        catch(e){ note('Не удалось запустить распознавание'); }
+        catch(e){ note('SR не стартанул, попробуй VAD'); }
       } else {
         try{ recognition.stop(); }catch(e){}
         recogOn=false; btnMic.classList.remove('primary'); note('Микрофон выключен');
       }
-      return;
+    } else {
+      if(!vadOn) startVAD(); else stopVAD();
     }
-    // Иначе — VAD (Android Chrome)
-    if(!vadOn) startVAD(); else stopVAD();
   };
 
   // Ввод 1..100
@@ -303,6 +325,12 @@
     fontVal.value=String(lastFont100); speedVal.value=String(lastSpeed100);
     applyFontNow(); note('Готово');
   })();
+
+  function stopAllMic(){
+    if(recogOn){ try{ recognition.stop(); }catch{} recogOn=false; }
+    if(vadOn) stopVAD();
+    btnMic.classList.remove('primary');
+  }
 })();
 </script>
 </body>
