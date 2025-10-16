@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Телесуфлер — веб-приложение</title>
+<style>
+  :root{
+    --bg:#000;
+    --fg:#f0f0f0;
+    --accent:#22c55e;
+    --muted:#999;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
+  .app{display:flex;flex-direction:column;height:100dvh;gap:.5rem}
+  .toolbar{
+    position:sticky;top:0;z-index:5;
+    display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;
+    padding:.5rem .75rem;background:rgba(20,20,20,.85);backdrop-filter:saturate(1.2) blur(6px);
+    border-bottom:1px solid #222;
+  }
+  .toolbar .group{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+  label{font-size:.9rem;color:var(--muted)}
+  input[type="range"]{accent-color:var(--accent)}
+  button, select, input[type="checkbox"]{font:inherit}
+  button{
+    background:#111;border:1px solid #333;color:var(--fg);padding:.5rem .75rem;border-radius:.5rem;
+    cursor:pointer;transition:transform .02s ease, background .2s, border-color .2s;
+    touch-action:manipulation;
+  }
+  button:active{transform:scale(.98)}
+  button.primary{background:var(--accent);color:#032d14;border-color:#1faa55}
+  button.danger{background:#7f1d1d;border-color:#450a0a}
+  button[disabled]{opacity:.6;pointer-events:none}
+  .toggle{display:inline-flex;gap:.4rem;align-items:center}
+  .toggle input{width:1.1rem;height:1.1rem}
+  .grow{flex:1}
+  .viewer{
+    position:relative;flex:1;overflow:auto;scroll-behavior:smooth;
+    -webkit-overflow-scrolling:touch;border-top:1px solid #222;
+  }
+  .mirror{transform:scaleX(-1)}
+  .script{
+    padding:8rem 8vw; /* широкие поля для отражения в зеркале */
+    line-height:1.8;
+    font-size:clamp(28px, 6vw, 72px);
+    word-break:break-word;
+  }
+  .script .word{padding:.04em .02em;border-radius:.15em}
+  .script .current{background:rgba(34,197,94,.22);outline:2px solid rgba(34,197,94,.55)}
+  .marker{
+    position:sticky;top:45%;height:0;border-top:2px dashed rgba(255,255,255,.25);z-index:2;margin:0 4vw
+  }
+  .editor{
+    display:flex;gap:.75rem;flex-wrap:wrap;align-items:center;padding:.5rem .75rem;background:#0b0b0b;border-top:1px solid #222
+  }
+  textarea{
+    width:100%;min-height:25dvh;background:#0c0c0c;color:var(--fg);border:1px solid #333;border-radius:.5rem;
+    padding:.75rem;font:inherit;line-height:1.6;resize:vertical
+  }
+  .hint{color:#bbb;font-size:.85rem}
+  .pill{padding:.25rem .5rem;border:1px solid #2a2a2a;border-radius:.5rem;color:#ddd}
+  .status{color:#ccc}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.95em}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="toolbar" role="toolbar" aria-label="Панель управления">
+    <div class="group">
+      <button id="btnLoad" title="Загрузить текст в суфлер">Загрузить текст</button>
+      <button id="btnPlay" class="primary" title="Старт / Пауза">Старт</button>
+      <button id="btnReset" title="Сброс к началу">В начало</button>
+      <button id="btnFS" title="На весь экран">⤢</button>
+    </div>
+    <div class="group">
+      <label class="toggle"><input type="checkbox" id="chkMirror"> Зеркало</label>
+      <label class="toggle"><input type="checkbox" id="chkFollowSpeech"> Следить за речью</label>
+      <label class="toggle"><input type="checkbox" id="chkHighlight"> Подсветка слов</label>
+    </div>
+    <div class="group">
+      <label>Шрифт
+        <input type="range" id="fontRange" min="24" max="120" value="60">
+      </label>
+      <label>Скорость (px/с)
+        <input type="range" id="speedRange" min="0" max="200" value="40">
+      </label>
+    </div>
+    <div class="group">
+      <label>Речь
+        <select id="lang">
+          <option value="ru-RU">ru-RU</option>
+          <option value="en-US">en-US</option>
+        </select>
+      </label>
+      <button id="btnMic">🎤 Микрофон</button>
+    </div>
+    <div class="grow"></div>
+    <div class="group">
+      <span class="pill mono" id="status">Готово</span>
+    </div>
+  </div>
+
+  <div id="viewer" class="viewer" tabindex="0">
+    <div class="marker" aria-hidden="true"></div>
+    <div id="script" class="script" aria-live="polite"></div>
+  </div>
+
+  <div class="editor">
+    <div class="grow">
+      <textarea id="src" placeholder="Вставь сюда свой текст сценария. Затем нажми «Загрузить текст».
+Подсказка: оставляй пустые строки для логических пауз."></textarea>
+      <div class="hint">Поддержка: крупный настраиваемый шрифт, зеркальный режим, автопрокрутка со скоростью и «следование за речью» через <span class="mono">SpeechRecognition</span> (в Safari — <span class="mono">webkitSpeechRecognition</span>). На iPhone дай сайту доступ к микрофону.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const $ = s=>document.querySelector(s);
+  const viewer = $('#viewer');
+  const scriptEl = $('#script');
+  const src = $('#src');
+  const btnLoad = $('#btnLoad');
+  const btnPlay = $('#btnPlay');
+  const btnReset = $('#btnReset');
+  const btnFS = $('#btnFS');
+  const chkMirror = $('#chkMirror');
+  const chkFollowSpeech = $('#chkFollowSpeech');
+  const chkHighlight = $('#chkHighlight');
+  const fontRange = $('#fontRange');
+  const speedRange = $('#speedRange');
+  const statusEl = $('#status');
+  const langSel = $('#lang');
+  const btnMic = $('#btnMic');
+
+  let playing = false;
+  let lastTs = 0;
+  let rafId = null;
+  let currentWord = 0;
+  let words = [];           // только слова (без знаков), для сопоставления речи
+  let spans = [];           // элементы .word по индексам слов
+  let recognition = null;
+  let recogOn = false;
+  let transcriptTail = [];  // последние N слов распознанной речи
+  const TAIL = 6;
+  const MAX_LOOKAHEAD = 60; // сколько слов вперёд ищем якорь
+
+  // --- helpers ---
+  const norm = (s)=> (s||"")
+    .toLowerCase()
+    .replaceAll('ё','е')
+    .replace(/[^\p{L}\p{N}'’\- ]+/gu,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+
+  function splitTokens(text){
+    // Разбиваем на токены: слова (вкл. кириллицу) и знаки препинания, сохраняя пробелы
+    const tokens = [];
+    const re = /[\p{L}\p{N}’'\-]+|[^\s\p{L}\p{N}]/gu;
+    let m, i=0;
+    while ((m = re.exec(text))){
+      // Вставить промежуточные пробелы, если есть
+      if (m.index > i) tokens.push(text.slice(i, m.index));
+      tokens.push(m[0]);
+      i = re.lastIndex;
+    }
+    if (i < text.length) tokens.push(text.slice(i));
+    return tokens;
+  }
+
+  function renderScript(text){
+    scriptEl.innerHTML = '';
+    words = [];
+    spans = [];
+    currentWord = 0;
+
+    const frag = document.createDocumentFragment();
+    const tokens = splitTokens(text);
+    tokens.forEach(tok=>{
+      if (/^[\p{L}\p{N}’'\-]+$/u.test(tok)){ // слово
+        const span = document.createElement('span');
+        span.className = 'word';
+        span.textContent = tok;
+        spans.push(span);
+        words.push(norm(tok));
+        frag.appendChild(span);
+      } else {
+        frag.appendChild(document.createTextNode(tok));
+      }
+    });
+    scriptEl.appendChild(frag);
+    updateHighlight();
+    scrollToCurrent(false);
+    setStatus(`Загружено слов: ${words.length}`);
+  }
+
+  function updateHighlight(){
+    if (!chkHighlight.checked) {
+      spans.forEach(s=>s.classList.remove('current'));
+      return;
+    }
+    spans.forEach((s,i)=> s.classList.toggle('current', i===currentWord));
+  }
+
+  function targetYForWord(i){
+    const el = spans[i] || scriptEl;
+    const rect = el.getBoundingClientRect();
+    const vr = viewer.getBoundingClientRect();
+    // целимся немного ниже центра линии-маркера
+    const offset = (vr.height*0.45) - vr.top; // позиция линии
+    const currentTop = viewer.scrollTop;
+    const y = currentTop + rect.top - vr.top - offset - rect.height*0.2;
+    return y<0 ? 0 : y;
+  }
+
+  function scrollToCurrent(smooth=true){
+    const y = targetYForWord(currentWord);
+    if (smooth){
+      viewer.scrollTo({top:y,behavior:'smooth'});
+    } else {
+      viewer.scrollTop = y;
+    }
+  }
+
+  function setStatus(s){ statusEl.textContent = s; }
+
+  // --- play loop (ручная автопрокрутка) ---
+  function loop(ts){
+    if (!playing){ rafId=null; return; }
+    if (!lastTs) lastTs = ts;
+    const dt = (ts - lastTs) / 1000;
+    lastTs = ts;
+    const pxps = Number(speedRange.value);
+    if (!chkFollowSpeech.checked && pxps>0){
+      viewer.scrollTop += pxps * dt;
+    }
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function start(){
+    if (playing) return;
+    playing = true;
+    btnPlay.textContent = 'Пауза';
+    lastTs = 0;
+    rafId = requestAnimationFrame(loop);
+    setStatus('Идёт прокрутка');
+  }
+
+  function pause(){
+    playing = false;
+    btnPlay.textContent = 'Старт';
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    setStatus('Пауза');
+  }
+
+  function resetToStart(){
+    currentWord = 0;
+    updateHighlight();
+    scrollToCurrent(false);
+  }
+
+  // --- speech recognition ---
+  function initRecognition(){
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR){
+      setStatus('SpeechRecognition недоступен в этом браузере');
+      btnMic.disabled = true;
+      return null;
+    }
+    const r = new SR();
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = langSel.value;
+    r.onresult = (ev)=>{
+      let finalChunk = '';
+      for (let i=ev.resultIndex;i<ev.results.length;i++){
+        const res = ev.results[i];
+        const text = res[0].transcript;
+        if (res.isFinal) finalChunk += ' ' + text;
+      }
+      if (finalChunk){
+        processTranscript(finalChunk);
+      }
+    };
+    r.onend = ()=>{
+      if (recogOn){
+        try { r.start(); } catch(e){ /* safari resume guard */ }
+      }
+    };
+    r.onerror = (e)=> setStatus('Ошибка речи: ' + (e.error||'unknown'));
+    return r;
+  }
+
+  function processTranscript(text){
+    // обновляем «хвост» последних слов и пробуем состыковать со сценарием
+    const toks = norm(text).split(' ').filter(Boolean);
+    transcriptTail.push(...toks);
+    if (transcriptTail.length>TAIL) transcriptTail = transcriptTail.slice(-TAIL);
+
+    // пробуем найти длинный якорь от 5 к 2 словам
+    for (let k=Math.min(TAIL,5); k>=2; k--){
+      const sub = transcriptTail.slice(-k);
+      const pos = findSubseq(words, sub, currentWord, MAX_LOOKAHEAD);
+      if (pos>=0){
+        currentWord = pos + k;
+        updateHighlight();
+        scrollToCurrent(true);
+        setStatus('Синхрон со речью ✓');
+        return;
+      }
+    }
+    // fallback: одиночное слово вперёд
+    const last = transcriptTail[transcriptTail.length-1];
+    if (last){
+      for (let i=currentWord;i<Math.min(words.length,currentWord+10);i++){
+        if (words[i]===last){
+          currentWord = i+1;
+          updateHighlight();
+          scrollToCurrent(true);
+          setStatus('Синхрон по слову ✓');
+          return;
+        }
+      }
+    }
+  }
+
+  function findSubseq(arr, sub, start, lookahead){
+    const end = Math.min(arr.length - sub.length, start + lookahead);
+    const needle = sub.join(' ');
+    for (let i=start;i<=end;i++){
+      // Быстрый пропуск: первое слово должно совпасть
+      if (arr[i]!==sub[0]) continue;
+      // Сравниваем окно
+      let ok = true;
+      for (let j=1;j<sub.length;j++){
+        if (arr[i+j]!==sub[j]) { ok=false; break; }
+      }
+      if (ok) return i;
+    }
+    return -1;
+  }
+
+  function toggleMic(){
+    if (!recognition){
+      recognition = initRecognition();
+      if (!recognition) return;
+    }
+    if (!recogOn){
+      try {
+        recognition.lang = langSel.value;
+        recognition.start();
+        recogOn = true;
+        btnMic.classList.add('primary');
+        setStatus('Микрофон включён');
+      } catch(e){
+        setStatus('Не удалось запустить распознавание');
+      }
+    } else {
+      try{ recognition.stop(); }catch(e){}
+      recogOn = false;
+      btnMic.classList.remove('primary');
+      setStatus('Микрофон выключен');
+    }
+  }
+
+  // --- events ---
+  btnLoad.addEventListener('click', ()=>{
+    const text = src.value.trim();
+    if (!text){ alert('Вставь текст в поле ниже.'); return; }
+    renderScript(text);
+    localStorage.setItem('tp_script', text);
+  });
+
+  btnPlay.addEventListener('click', ()=> playing ? pause() : start());
+  btnReset.addEventListener('click', resetToStart);
+  btnFS.addEventListener('click', ()=>{
+    const el = document.documentElement;
+    if (!document.fullscreenElement){
+      el.requestFullscreen?.();
+    } else {
+      document.exitFullscreen?.();
+    }
+  });
+  chkMirror.addEventListener('change', ()=>{
+    viewer.classList.toggle('mirror', chkMirror.checked);
+    localStorage.setItem('tp_mirror', chkMirror.checked ? '1':'0');
+  });
+  chkFollowSpeech.addEventListener('change', ()=>{
+    localStorage.setItem('tp_follow', chkFollowSpeech.checked ? '1':'0');
+  });
+  chkHighlight.addEventListener('change', updateHighlight);
+  fontRange.addEventListener('input', ()=>{
+    scriptEl.style.fontSize = fontRange.value + 'px';
+    localStorage.setItem('tp_font', fontRange.value);
+  });
+  speedRange.addEventListener('input', ()=>{
+    localStorage.setItem('tp_speed', speedRange.value);
+  });
+  btnMic.addEventListener('click', toggleMic);
+  langSel.addEventListener('change', ()=>{
+    localStorage.setItem('tp_lang', langSel.value);
+    if (recognition && recogOn){
+      recognition.stop(); // перезапуск с новым языком
+      setTimeout(()=>{ try{ recognition.start(); }catch(e){} }, 150);
+    }
+  });
+
+  viewer.addEventListener('click', ()=> playing ? pause() : start());
+  viewer.addEventListener('keydown', (e)=>{
+    if (e.code==='Space'){ e.preventDefault(); playing ? pause() : start(); }
+    if (e.code==='ArrowRight'){ currentWord = Math.min(currentWord+1, words.length-1); updateHighlight(); scrollToCurrent(true); }
+    if (e.code==='ArrowLeft'){ currentWord = Math.max(currentWord-1, 0); updateHighlight(); scrollToCurrent(true); }
+  });
+
+  // --- restore state ---
+  (function restore(){
+    const saved = localStorage.getItem('tp_script');
+    if (saved){ src.value = saved; renderScript(saved); }
+    const font = localStorage.getItem('tp_font'); if (font){ fontRange.value = font; scriptEl.style.fontSize = font+'px'; }
+    const speed = localStorage.getItem('tp_speed'); if (speed){ speedRange.value = speed; }
+    const mir = localStorage.getItem('tp_mirror')==='1'; chkMirror.checked = mir; viewer.classList.toggle('mirror', mir);
+    const follow = localStorage.getItem('tp_follow')==='1'; chkFollowSpeech.checked = follow;
+    const lang = localStorage.getItem('tp_lang'); if (lang){ langSel.value = lang; }
+    chkHighlight.checked = true;
+  })();
+
+  // Пример текста по умолчанию (если ничего не сохранено)
+  if (!src.value){
+    src.value = `Это демо веб-суфлера. Вставь сюда свой текст и нажми «Загрузить текст». 
+Включи «Зеркало», если используешь зеркальную пластину. 
+Нажми 🎤 «Микрофон» — и суфлер будет подстраиваться под твою речь.`;
+    renderScript(src.value);
+  }
+
+})();
+</script>
+</body>
+</html>
