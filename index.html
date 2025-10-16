@@ -17,7 +17,7 @@
   .toolbar .group{ display:flex; gap:.5rem; align-items:center; flex-wrap:wrap }
   label{ font-size:.9rem; color:var(--muted) }
   input[type="number"]{
-    width:5.5rem; padding:.45rem .6rem; border-radius:.6rem; border:1px solid #333; background:#0e0e0e; color:var(--fg);
+    width:5.5rem; padding:.45rem .6rem; border-radius:.6rem; border:1px solid #333; background:#0e0e0e; color:#fff;
     font:inherit; -moz-appearance:textfield;
   }
   input[type="number"]::-webkit-outer-spin-button,
@@ -31,7 +31,16 @@
   .pill{ padding:.25rem .5rem; border:1px solid #2a2a2a; border-radius:.6rem; color:#ddd }
   .viewer{ position:relative; flex:1; overflow:hidden; border-top:1px solid #222 }
   .mirror{ transform:scaleX(-1) }
-  .script{ position:absolute; left:8vw; right:8vw; top:8rem; line-height:1.8; font-size:84px; will-change:transform; transform:translateY(0) }
+  .script{
+    position:absolute; left:8vw; right:8vw; top:8rem;
+    line-height:1.8; font-size:84px; will-change:transform; transform:translateY(0);
+
+    /* переносы и аккуратная разметка текста */
+    white-space: pre-wrap;       /* сохраняем \n, переносим по пробелам */
+    overflow-wrap: anywhere;     /* длинные слова/URL переносим где угодно */
+    word-break: normal;          /* не рубим слова жестко */
+    -webkit-hyphens: auto; hyphens: auto; /* дефисы там, где есть словарь */
+  }
   .word{ padding:.04em .02em; border-radius:.15em }
   .current{ background:rgba(34,197,94,.22); outline:2px solid rgba(34,197,94,.55) }
   .reading .toolbar, .reading .editor{ display:none!important }
@@ -102,24 +111,21 @@
   // SR и VAD
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
   const supportsVAD = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && (window.AudioContext||window.webkitAudioContext));
-  let micMode='vad'; // по умолчанию VAD, как просил
+  let micMode='vad'; // по умолчанию VAD
   let recognition=null, recogOn=false, tail=[];
   const TAIL=6, LOOKAHEAD=60;
 
   let audioCtx=null, mediaStream=null, analyser=null, vadOn=false, voiceActive=false, vadRaf=null;
-  const VAD_ON=0.025, VAD_OFF=0.015; // RMS пороги с гистерезисом
+  const VAD_ON=0.025, VAD_OFF=0.015; // RMS пороги
 
   // Инициализация селектора режима
   (function initMicMode(){
-    // если SR недоступен — выключаем пункт SR
     if(!SR){ micModeSel.querySelector('option[value="sr"]').disabled = true; }
     if(!supportsVAD){ micModeSel.querySelector('option[value="vad"]').disabled = true; }
-    // дефолт: VAD, но если VAD недоступен, а SR есть — переключим на SR
     if(!supportsVAD && SR) micMode='sr';
     micModeSel.value = micMode;
     micModeSel.addEventListener('change', ()=>{
       const next = micModeSel.value;
-      // если режим меняют на лету — выключим текущий микрофон и включим заново при нажатии
       stopAllMic();
       micMode = next;
       note('Режим микрофона: ' + (micMode==='vad'?'VAD':'SR'));
@@ -130,7 +136,7 @@
   function map100(n,min,max){ return min + (max - min) * (n - 1) / 99; }
   const norm = s => (s||"").toLowerCase().replaceAll('ё','е').replace(/[^\p{L}\p{N}'’\- ]+/gu,' ').replace(/\s+/g,' ').trim();
 
-  // Рендер текста (с обёрткой слов — вдруг включишь SR)
+  // Рендер текста с обёрткой слов (для SR)
   function splitTokens(text){
     const tokens=[]; const re=/[\p{L}\p{N}’'\-]+|[^\s\p{L}\p{N}]/gu; let m,i=0;
     while(m=re.exec(text)){ if(m.index>i) tokens.push(text.slice(i,m.index)); tokens.push(m[0]); i=re.lastIndex }
@@ -160,9 +166,6 @@
     const follow = chkFollow.checked;
     const speedPxPerSec = map100(lastSpeed100, SPEED_MIN, SPEED_MAX);
 
-    // Гейт: если follow включен
-    //  - режим SR и SR активен: автоскролл НЕ идёт (прыгаем по словам)
-    //  - режим VAD и VAD активен: автоскролл идёт, только когда voiceActive
     let gate=1;
     if(follow){
       if(micMode==='sr' && recogOn) gate=0;
@@ -215,7 +218,7 @@
   // VAD (по голосовой активности)
   async function startVAD(){
     if(vadOn) return;
-    if(!supportsVAD){ note('VAD недоступен'); return; }
+    if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){ note('VAD недоступен'); return; }
     try{
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const stream = await navigator.mediaDevices.getUserMedia({audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }});
@@ -296,7 +299,6 @@
   chkMirror.onchange=()=> viewer.classList.toggle('mirror', chkMirror.checked);
 
   btnMic.onclick=()=>{
-    // если включён SR-режим и SR доступен — используем SR; иначе — VAD
     if(micMode==='sr' && SR){
       if(!recognition) recognition = initSR();
       if(!recogOn){
@@ -311,13 +313,11 @@
     }
   };
 
-  // Ввод 1..100
   fontVal.addEventListener('input', onFontInput);
   fontVal.addEventListener('blur', onFontBlur);
   speedVal.addEventListener('input', onSpeedInput);
   speedVal.addEventListener('blur', onSpeedBlur);
 
-  // Восстановление
   (function(){
     const savedT=localStorage.getItem('tp_script_simple'); if(savedT){ src.value=savedT; render(savedT); }
     const f100=Number(localStorage.getItem('tp_font100')); if(Number.isInteger(f100)&&f100>=1&&f100<=100){ lastFont100=f100; }
