@@ -3,228 +3,134 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Телесуфлёр</title>
-
-<!-- PWA / iOS фуллскрин -->
-<meta name="theme-color" content="#000000">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
-<link rel="manifest" href="./manifest.webmanifest">
-<link rel="apple-touch-icon" href="./icon-512.png">
-
+<title>Телесуфлёр — failsafe</title>
 <style>
-  :root{ --bg:#000; --fg:#f0f0f0; --accent:#22c55e; --muted:#9aa0a6; }
+  :root{ --bg:#000; --fg:#f3f3f3; --muted:#9aa0a6; --accent:#22c55e; }
   *{ box-sizing:border-box }
   html,body{ height:100%; margin:0; background:var(--bg); color:var(--fg);
     font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif }
   body{ padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom) }
   .app{ display:flex; flex-direction:column; height:100dvh; gap:.5rem }
   .toolbar{
-    position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; gap:.5rem; align-items:center;
-    padding: calc(.5rem + env(safe-area-inset-top)/2) .75rem .5rem .75rem;
-    background:rgba(18,18,18,.92); backdrop-filter: blur(6px); border-bottom:1px solid #222;
+    position:sticky; top:0; z-index:3; display:flex; flex-wrap:wrap; gap:.5rem; align-items:center;
+    padding:.5rem .75rem; background:rgba(18,18,18,.92); backdrop-filter:blur(6px); border-bottom:1px solid #222;
   }
   .toolbar .group{ display:flex; gap:.5rem; align-items:center; flex-wrap:wrap }
-  button, select, input{ font:inherit }
-  button{
-    background:#111; border:1px solid #333; color:var(--fg); padding:.5rem .75rem; border-radius:.6rem;
-    cursor:pointer; transition:transform .02s, background .2s, border-color .2s; touch-action:manipulation;
-  }
-  button:active{ transform:scale(.98) }
-  button.primary{ background:var(--accent); color:#032d14; border-color:#1faa55 }
-  button[disabled]{ opacity:.6; pointer-events:none }
   label{ font-size:.9rem; color:var(--muted) }
   input[type="range"]{ accent-color:var(--accent) }
-  .toggle{ display:inline-flex; gap:.4rem; align-items:center }
-  .grow{ flex:1 }
-  .viewer{ position:relative; flex:1; overflow:auto; scroll-behavior:smooth; -webkit-overflow-scrolling:touch; border-top:1px solid #222 }
+  button{ font:inherit; background:#111; color:var(--fg); border:1px solid #333; padding:.5rem .75rem; border-radius:.6rem; }
+  button.primary{ background:var(--accent); color:#052b13; border-color:#1daa56 }
+  .viewer{
+    position:relative; flex:1; overflow:hidden; border-top:1px solid #222;
+  }
   .mirror{ transform:scaleX(-1) }
-  .script{ padding:8rem 8vw; line-height:1.8; font-size:clamp(28px, 6vw, 80px); word-break:break-word }
-  .script .word{ padding:.04em .02em; border-radius:.15em }
-  .script .current{ background:rgba(34,197,94,.22); outline:2px solid rgba(34,197,94,.55) }
-  .marker{ position:sticky; top:45%; height:0; border-top:2px dashed rgba(255,255,255,.25); z-index:2; margin:0 4vw }
-  .editor{ display:flex; gap:.75rem; flex-wrap:wrap; align-items:center; padding:.5rem .75rem calc(.5rem + env(safe-area-inset-bottom)); background:#0b0b0b; border-top:1px solid #222 }
-  textarea{ width:100%; min-height:25dvh; background:#0c0c0c; color:var(--fg); border:1px solid #333; border-radius:.6rem; padding:.75rem; line-height:1.6; resize:vertical }
-  .hint{ color:#bbb; font-size:.85rem }
-  .pill{ padding:.25rem .5rem; border:1px solid #2a2a2a; border-radius:.6rem; color:#ddd }
-  .reading .toolbar, .reading .editor{ display:none !important }
+  .script{
+    position:absolute; left:8vw; right:8vw; top:8rem;
+    line-height:1.8; font-size:clamp(28px, 6vw, 84px); will-change:transform;
+    transform:translateY(0);
+  }
+  .reading .toolbar, .reading .editor{ display:none!important }
   .reading .viewer{ height:100dvh }
+  .editor{ padding:.5rem .75rem; background:#0b0b0b; border-top:1px solid #222 }
+  textarea{ width:100%; min-height:26dvh; background:#0c0c0c; color:var(--fg); border:1px solid #333; border-radius:.6rem; padding:.75rem; line-height:1.6 }
+  .hint{ color:#bbb; font-size:.85rem }
 </style>
 </head>
 <body>
 <div class="app">
-  <div class="toolbar" role="toolbar" aria-label="Панель управления">
+  <div class="toolbar">
     <div class="group">
       <button id="btnLoad">Загрузить текст</button>
       <button id="btnPlay" class="primary">Старт</button>
       <button id="btnReset">В начало</button>
-      <button id="btnRead" title="Скрыть панели">Чтение</button>
+      <button id="btnRead">Чтение</button>
     </div>
     <div class="group">
-      <label class="toggle"><input type="checkbox" id="chkMirror"> Зеркало</label>
-      <label class="toggle"><input type="checkbox" id="chkFollowSpeech"> Следить за речью</label>
-      <label class="toggle"><input type="checkbox" id="chkHighlight" checked> Подсветка слов</label>
+      <label>Шрифт <input type="range" id="fontRange" min="24" max="120" value="84"></label>
+      <label>Скорость (px/с) <input type="range" id="speedRange" min="10" max="300" value="140"></label>
+      <label><input type="checkbox" id="chkMirror"> Зеркало</label>
     </div>
-    <div class="group">
-      <label>Шрифт <input type="range" id="fontRange" min="24" max="120" value="68"></label>
-      <label>Скорость (px/с) <input type="range" id="speedRange" min="0" max="200" value="100"></label>
-    </div>
-    <div class="group">
-      <label>Речь
-        <select id="lang">
-          <option value="ru-RU">ru-RU</option>
-          <option value="en-US">en-US</option>
-        </select>
-      </label>
-      <button id="btnMic">🎤 Микрофон</button>
-    </div>
-    <div class="grow"></div>
-    <div class="group"><span class="pill" id="status">Готово</span></div>
   </div>
 
-  <div id="viewer" class="viewer" tabindex="0">
-    <div class="marker" aria-hidden="true"></div>
-    <div id="script" class="script" aria-live="polite"></div>
+  <div id="viewer" class="viewer">
+    <div id="script" class="script"></div>
   </div>
 
   <div class="editor">
-    <div class="grow">
-      <textarea id="src" placeholder="Вставь свой текст и нажми «Загрузить текст». Пустые строки — для пауз."></textarea>
-      <div class="hint">Safari (iOS): добавь на Домой для честного фуллскрина. Chrome (iOS) не даёт распознавание речи — кнопка 🎤 активна в Safari.</div>
-    </div>
+    <textarea id="src" placeholder="Вставь текст → «Загрузить текст». Затем «Старт». Для пауз оставляй пустые строки."></textarea>
+    <div class="hint">Этот режим двигает текст как картинку (translateY). Работает на iOS даже если программный скролл заблокирован.</div>
   </div>
 </div>
 
 <script>
 (function(){
-  const $ = s=>document.querySelector(s);
-  const viewer = $('#viewer'), scriptEl = $('#script'), src = $('#src');
-  const btnLoad = $('#btnLoad'), btnPlay = $('#btnPlay'), btnReset = $('#btnReset'), btnRead = $('#btnRead');
-  const chkMirror = $('#chkMirror'), chkFollowSpeech = $('#chkFollowSpeech'), chkHighlight = $('#chkHighlight');
-  const fontRange = $('#fontRange'), speedRange = $('#speedRange'), statusEl = $('#status');
-  const langSel = $('#lang'), btnMic = $('#btnMic');
+  const $=s=>document.querySelector(s);
+  const viewer=$('#viewer'), script=$('#script'), src=$('#src');
+  const btnLoad=$('#btnLoad'), btnPlay=$('#btnPlay'), btnReset=$('#btnReset'), btnRead=$('#btnRead');
+  const fontRange=$('#fontRange'), speedRange=$('#speedRange'), chkMirror=$('#chkMirror');
 
-  let playing=false, lastTs=0, rafId=null, currentWord=0;
-  let words=[], spans=[], recognition=null, recogOn=false, transcriptTail=[];
-  const TAIL=6, MAX_LOOKAHEAD=60;
+  let playing=false, last=0, offset=0;
 
-  const norm = s => (s||"").toLowerCase().replaceAll('ё','е').replace(/[^\p{L}\p{N}'’\- ]+/gu,' ').replace(/\s+/g,' ').trim();
-
-  function splitTokens(text){
-    const tokens=[]; const re=/[\p{L}\p{N}’'\-]+|[^\s\p{L}\p{N}]/gu; let m,i=0;
-    while(m=re.exec(text)){ if(m.index>i) tokens.push(text.slice(i,m.index)); tokens.push(m[0]); i=re.lastIndex }
-    if(i<text.length) tokens.push(text.slice(i)); return tokens;
+  function render(text){
+    script.style.transform='translateY(0)';
+    offset=0;
+    // простая вставка (без обёрток по словам — нам важна прокрутка)
+    script.textContent = text || 'Добавь текста побольше, чем один экран 🙂';
   }
-
-  function renderScript(text){
-    scriptEl.innerHTML=''; words=[]; spans=[]; currentWord=0;
-    const frag=document.createDocumentFragment(), tokens=splitTokens(text);
-    tokens.forEach(tok=>{
-      if (/^[\p{L}\p{N}’'\-]+$/u.test(tok)){
-        const span=document.createElement('span'); span.className='word'; span.textContent=tok;
-        spans.push(span); words.push(norm(tok)); frag.appendChild(span);
-      } else frag.appendChild(document.createTextNode(tok));
-    });
-    scriptEl.appendChild(frag); updateHighlight(); scrollToCurrent(false); setStatus(`Загружено слов: ${words.length}`);
-  }
-
-  function updateHighlight(){ spans.forEach((s,i)=> s.classList.toggle('current', chkHighlight.checked && i===currentWord)); }
-  function targetYForWord(i){
-    const el=spans[i]||scriptEl, rect=el.getBoundingClientRect(), vr=viewer.getBoundingClientRect();
-    const offset=(vr.height*0.45)-vr.top, currentTop=viewer.scrollTop;
-    const y=currentTop + rect.top - vr.top - offset - rect.height*0.2; return y<0?0:y;
-  }
-  function scrollToCurrent(smooth=true){ const y=targetYForWord(currentWord); smooth? viewer.scrollTo({top:y,behavior:'smooth'}): (viewer.scrollTop=y); }
-  function setStatus(s){ statusEl.textContent=s; }
 
   function loop(ts){
-    if(!playing){ rafId=null; return; }
-    if(!lastTs) lastTs=ts; const dt=(ts-lastTs)/1000; lastTs=ts;
-    const pxps=Number(speedRange.value);
-    // ВАЖНО: скроллим, если режим слежения не активен ИЛИ микрофон реально не запущен
-    if (!(chkFollowSpeech.checked && recogOn) && pxps>0){ viewer.scrollTop += pxps * dt; }
-    rafId=requestAnimationFrame(loop);
-  }
-  function start(){ if(playing) return; document.body.classList.add('reading'); playing=true; btnPlay.textContent='Пауза'; lastTs=0; rafId=requestAnimationFrame(loop); setStatus('Идёт прокрутка'); }
-  function pause(){ playing=false; btnPlay.textContent='Старт'; if(rafId) cancelAnimationFrame(rafId); rafId=null; setStatus('Пауза'); }
-  function resetToStart(){ currentWord=0; updateHighlight(); scrollToCurrent(false); }
-
-  function initRecognition(){
-    const SR=window.SpeechRecognition || window.webkitSpeechRecognition;
-    if(!SR){ setStatus('SpeechRecognition недоступен'); btnMic.disabled=true; return null; }
-    const r=new SR(); r.continuous=true; r.interimResults=true; r.lang=langSel.value;
-    r.onresult=ev=>{
-      let finalChunk=''; for(let i=ev.resultIndex;i<ev.results.length;i++){ const res=ev.results[i]; const text=res[0].transcript; if(res.isFinal) finalChunk+=' '+text; }
-      if(finalChunk) processTranscript(finalChunk);
-    };
-    r.onend=()=>{ if(recogOn){ try{ r.start(); }catch(e){} } };
-    r.onerror=e=> setStatus('Ошибка речи: ' + (e.error||'unknown'));
-    return r;
+    if(!playing){ last=0; return; }
+    if(!last) last=ts;
+    const dt=(ts-last)/1000; last=ts;
+    const speed = Number(speedRange.value);
+    offset += speed * dt;
+    script.style.transform = `translateY(${-offset}px)`;
+    requestAnimationFrame(loop);
   }
 
-  function processTranscript(text){
-    const toks=norm(text).split(' ').filter(Boolean);
-    transcriptTail.push(...toks); if(transcriptTail.length>TAIL) transcriptTail=transcriptTail.slice(-TAIL);
-    for(let k=Math.min(TAIL,5); k>=2; k--){
-      const sub=transcriptTail.slice(-k); const pos=findSubseq(words, sub, currentWord, MAX_LOOKAHEAD);
-      if(pos>=0){ currentWord=pos+k; updateHighlight(); scrollToCurrent(true); setStatus('Синхрон со речью ✓'); return; }
-    }
-    const last=transcriptTail[transcriptTail.length-1];
-    if(last){ for(let i=currentWord;i<Math.min(words.length,currentWord+10);i++){ if(words[i]===last){ currentWord=i+1; updateHighlight(); scrollToCurrent(true); setStatus('Синхрон по слову ✓'); return; } } }
-  }
-  function findSubseq(arr, sub, start, lookahead){
-    const end=Math.min(arr.length-sub.length, start+lookahead);
-    for(let i=start;i<=end;i++){ if(arr[i]!==sub[0]) continue; let ok=true; for(let j=1;j<sub.length;j++){ if(arr[i+j]!==sub[j]){ ok=false; break; } } if(ok) return i; }
-    return -1;
-  }
+  btnLoad.onclick=()=>{
+    const t = src.value.trim();
+    if(!t){ alert('Вставь текст ниже.'); return; }
+    render(t);
+    localStorage.setItem('tp_script_simple', t);
+  };
 
-  function toggleMic(){
-    if(!recognition){ recognition=initRecognition(); if(!recognition) return; }
-    if(!recogOn){
-      try{ recognition.lang=langSel.value; recognition.start(); recogOn=true; btnMic.classList.add('primary'); setStatus('Микрофон включён'); }
-      catch(e){ setStatus('Не удалось запустить распознавание'); }
-    } else {
-      try{ recognition.stop(); }catch(e){} recogOn=false; btnMic.classList.remove('primary'); setStatus('Микрофон выключен');
-    }
-  }
+  btnPlay.onclick=()=>{
+    playing=!playing;
+    btnPlay.textContent = playing ? 'Пауза' : 'Старт';
+    if(playing){ document.body.classList.add('reading'); requestAnimationFrame(loop); }
+  };
 
-  // events
-  btnLoad.addEventListener('click', ()=>{ const text=src.value.trim(); if(!text){ alert('Вставь текст в поле ниже.'); return; } renderScript(text); localStorage.setItem('tp_script', text); });
-  btnPlay.addEventListener('click', ()=> playing? pause(): start());
-  btnReset.addEventListener('click', resetToStart);
-  btnRead.addEventListener('click', ()=> document.body.classList.toggle('reading'));
-  $('#viewer').addEventListener('click', ()=> playing? pause(): start());
-  $('#viewer').addEventListener('keydown', e=>{
-    if(e.code==='Space'){ e.preventDefault(); playing? pause(): start(); }
-    if(e.code==='ArrowRight'){ currentWord=Math.min(currentWord+1, words.length-1); updateHighlight(); scrollToCurrent(true); }
-    if(e.code==='ArrowLeft'){ currentWord=Math.max(currentWord-1, 0); updateHighlight(); scrollToCurrent(true); }
-  });
-  $('#fontRange').addEventListener('input', ()=>{ scriptEl.style.fontSize=fontRange.value+'px'; localStorage.setItem('tp_font', fontRange.value); });
-  $('#speedRange').addEventListener('input', ()=> localStorage.setItem('tp_speed', speedRange.value));
-  $('#chkMirror').addEventListener('change', ()=>{ $('#viewer').classList.toggle('mirror', chkMirror.checked); localStorage.setItem('tp_mirror', chkMirror.checked?'1':'0'); });
-  $('#chkFollowSpeech').addEventListener('change', ()=> localStorage.setItem('tp_follow', chkFollowSpeech.checked?'1':'0'));
-  $('#chkHighlight').addEventListener('change', updateHighlight);
-  $('#lang').addEventListener('change', ()=>{ localStorage.setItem('tp_lang', langSel.value); if(recognition && recogOn){ recognition.stop(); setTimeout(()=>{ try{ recognition.start(); }catch(e){} },150); } });
-  $('#btnMic').addEventListener('click', toggleMic);
+  btnReset.onclick=()=>{
+    playing=false; btnPlay.textContent='Старт';
+    offset=0; script.style.transform='translateY(0)';
+  };
 
-  // restore
-  (function restore(){
-    const saved=localStorage.getItem('tp_script'); if(saved){ src.value=saved; renderScript(saved); }
-    const font=localStorage.getItem('tp_font'); if(font){ fontRange.value=font; scriptEl.style.fontSize=font+'px'; }
-    const speed=localStorage.getItem('tp_speed'); if(speed){ speedRange.value=speed; }
-    const mir=localStorage.getItem('tp_mirror')==='1'; chkMirror.checked=mir; $('#viewer').classList.toggle('mirror', mir);
-    const follow=localStorage.getItem('tp_follow')==='1'; chkFollowSpeech.checked=follow;
-    const lang=localStorage.getItem('tp_lang'); if(lang){ langSel.value=lang; }
+  btnRead.onclick=()=> document.body.classList.toggle('reading');
+
+  fontRange.oninput=()=>{ script.style.fontSize = fontRange.value+'px'; };
+  speedRange.oninput=()=>{}; // скорость берём прямо из range
+
+  chkMirror.onchange=()=> viewer.classList.toggle('mirror', chkMirror.checked);
+
+  // восстановление
+  (function(){
+    const saved = localStorage.getItem('tp_script_simple');
+    if(saved){ src.value = saved; render(saved); }
+    // по умолчанию что-то длиннее экрана
     if(!src.value){
-      src.value=`Это демо веб-суфлёра. Вставь сюда свой текст и нажми «Загрузить текст».
-Включи «Зеркало», если используешь зеркальную пластину.
-Нажми 🎤 «Микрофон» — и суфлёр будет подстраиваться под твою речь (в Safari).`;
-      renderScript(src.value);
-    }
-  })();
+      const demo=`Это демо failsafe-режима. 
+Он двигает текст через CSS transform, а не скроллит контейнер.
+Это надёжно работает на iPhone. 
+Добавь сюда длинный текст, нажми «Загрузить текст», потом «Старт». 
 
-  // sw (офлайн + standalone)
-  if('serviceWorker' in navigator){ navigator.serviceWorker.register('./sw.js').catch(()=>{}); }
+Пустые строки — это визуальные паузы. 
+Шрифт и скорость регулируются ползунками.`;
+      src.value = demo;
+      render(demo);
+    }
+    script.style.fontSize = fontRange.value+'px';
+  })();
 })();
 </script>
 </body>
