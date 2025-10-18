@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Телесуфлёр — VAD везде, SR опционально</title>
+<title>Телесуфлёр — зеркало по X и Y по умолчанию</title>
 <style>
   :root{ --bg:#000; --fg:#f3f3f3; --muted:#9aa0a6; --accent:#22c55e; }
   *{ box-sizing:border-box }
@@ -22,29 +22,34 @@
   }
   input[type="number"]::-webkit-outer-spin-button,
   input[type="number"]::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
-  select{
-    background:#0e0e0e; color:#fff; border:1px solid #333; border-radius:.6rem; padding:.45rem .6rem; font:inherit;
-  }
-  button{ font:inherit; background:#111; color:#fff; border:1px solid #333; padding:.5rem .75rem; border-radius:.6rem; }
+  select{ background:#0e0e0e; color:#fff; border:1px solid #333; border-radius:.6rem; padding:.45rem .6rem; font:inherit }
+  button{ font:inherit; background:#111; color:#fff; border:1px solid #333; padding:.5rem .75rem; border-radius:.6rem }
   button.primary{ background:var(--accent); color:#052b13; border-color:#1daa56 }
   button[disabled]{ opacity:.6; pointer-events:none }
   .pill{ padding:.25rem .5rem; border:1px solid #2a2a2a; border-radius:.6rem; color:#ddd }
-  .viewer{ position:relative; flex:1; overflow:hidden; border-top:1px solid #222 }
-  .mirror{ transform:scaleX(-1) }
-  .script{
-    position:absolute; left:8vw; right:8vw; top:8rem;
-    line-height:1.8; font-size:84px; will-change:transform; transform:translateY(0);
 
-    /* переносы и аккуратная разметка текста */
-    white-space: pre-wrap;       /* сохраняем \n, переносим по пробелам */
-    overflow-wrap: anywhere;     /* длинные слова/URL переносим где угодно */
-    word-break: normal;          /* не рубим слова жестко */
-    -webkit-hyphens: auto; hyphens: auto; /* дефисы там, где есть словарь */
+  .viewer{ position:relative; flex:1; overflow:hidden; border-top:1px solid #222 }
+  /* Зеркало: теперь по умолчанию и по X, и по Y */
+  .mirror{ transform: scale(-1,-1); }
+
+  .script{
+    position:absolute; inset:8rem 0 auto 0;
+    padding:0 8vw; padding-right:calc(8vw + .6em);
+    line-height:1.8; font-size:84px;
+    transform:translate3d(0,0,0); will-change:transform;
+
+    /* переносы — чтобы не резало слова */
+    white-space:pre-wrap;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+    -webkit-hyphens:auto; hyphens:auto;
   }
   .word{ padding:.04em .02em; border-radius:.15em }
   .current{ background:rgba(34,197,94,.22); outline:2px solid rgba(34,197,94,.55) }
+
   .reading .toolbar, .reading .editor{ display:none!important }
   .reading .viewer{ height:100dvh }
+
   .editor{ padding:.5rem .75rem; background:#0b0b0b; border-top:1px solid #222 }
   textarea{ width:100%; min-height:26dvh; background:#0c0c0c; color:#fff; border:1px solid #333; border-radius:.6rem; padding:.75rem; line-height:1.6 }
   .hint{ color:#bbb; font-size:.85rem }
@@ -62,19 +67,16 @@
     <div class="group">
       <label>Размер (1–100) <input type="number" id="fontVal" min="1" max="100" value="70" inputmode="numeric" placeholder="1–100"></label>
       <label>Скорость (1–100) <input type="number" id="speedVal" min="1" max="100" value="50" inputmode="numeric" placeholder="1–100"></label>
-      <label><input type="checkbox" id="chkMirror"> Зеркало</label>
+      <label><input type="checkbox" id="chkMirror" checked> Зеркало</label>
     </div>
     <div class="group">
-      <label title="Режим работы микрофона">
-        Микро-режим
+      <label>Микро-режим
         <select id="micMode">
           <option value="vad">По голосу (VAD)</option>
           <option value="sr">По словам (SR)</option>
         </select>
       </label>
-      <label title="Останавливать/вести текст от микрофона">
-        <input type="checkbox" id="chkFollow"> Следить по микрофону
-      </label>
+      <label><input type="checkbox" id="chkFollow"> Следить по микрофону</label>
       <button id="btnMic">🎤 Микрофон</button>
     </div>
     <div class="group"><span class="pill" id="status">Готово</span></div>
@@ -86,7 +88,7 @@
 
   <div class="editor">
     <textarea id="src" placeholder="Вставь текст → «Загрузить текст». Потом «Старт». Пустые строки — паузы."></textarea>
-    <div class="hint">VAD работает и в Safari, и в Chrome. SR (по словам) — только там, где браузер поддерживает SpeechRecognition.</div>
+    <div class="hint">VAD работает и в Safari, и в Chrome. SR — там, где браузер поддерживает SpeechRecognition.</div>
   </div>
 </div>
 
@@ -111,23 +113,24 @@
   // SR и VAD
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
   const supportsVAD = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && (window.AudioContext||window.webkitAudioContext));
-  let micMode='vad'; // по умолчанию VAD
+  let micMode='vad';
   let recognition=null, recogOn=false, tail=[];
   const TAIL=6, LOOKAHEAD=60;
 
   let audioCtx=null, mediaStream=null, analyser=null, vadOn=false, voiceActive=false, vadRaf=null;
-  const VAD_ON=0.025, VAD_OFF=0.015; // RMS пороги
+  const VAD_ON=0.025, VAD_OFF=0.015;
 
-  // Инициализация селектора режима
+  // --- зеркало: включаем класс на viewer по умолчанию ---
+  viewer.classList.add('mirror');
+
+  // Инициализация режима микрофона
   (function initMicMode(){
     if(!SR){ micModeSel.querySelector('option[value="sr"]').disabled = true; }
     if(!supportsVAD){ micModeSel.querySelector('option[value="vad"]').disabled = true; }
     if(!supportsVAD && SR) micMode='sr';
     micModeSel.value = micMode;
     micModeSel.addEventListener('change', ()=>{
-      const next = micModeSel.value;
-      stopAllMic();
-      micMode = next;
+      stopAllMic(); micMode = micModeSel.value;
       note('Режим микрофона: ' + (micMode==='vad'?'VAD':'SR'));
     });
   })();
@@ -136,14 +139,14 @@
   function map100(n,min,max){ return min + (max - min) * (n - 1) / 99; }
   const norm = s => (s||"").toLowerCase().replaceAll('ё','е').replace(/[^\p{L}\p{N}'’\- ]+/gu,' ').replace(/\s+/g,' ').trim();
 
-  // Рендер текста с обёрткой слов (для SR)
+  // Рендер текста (с обёрткой слов для SR)
   function splitTokens(text){
     const tokens=[]; const re=/[\p{L}\p{N}’'\-]+|[^\s\p{L}\p{N}]/gu; let m,i=0;
     while(m=re.exec(text)){ if(m.index>i) tokens.push(text.slice(i,m.index)); tokens.push(m[0]); i=re.lastIndex }
     if(i<text.length) tokens.push(text.slice(i)); return tokens;
   }
   function render(text){
-    script.style.transform='translateY(0)'; offset=0; currentWord=0;
+    script.style.transform='translate3d(0,0,0)'; offset=0; currentWord=0;
     words=[]; spans=[]; script.innerHTML='';
     const toks=splitTokens(text || 'Добавь текста побольше, чем один экран 🙂');
     const frag=document.createDocumentFragment();
@@ -157,7 +160,10 @@
   }
   function highlight(){ spans.forEach((s,i)=> s.classList.toggle('current', i===currentWord)); }
 
-  // Главный цикл (translateY)
+  // помогающий флаг: включено ли вертикальное зеркало (у нас зеркало = X+Y)
+  function isMirrored(){ return viewer.classList.contains('mirror'); }
+
+  // Главный цикл
   function loop(ts){
     if(!playing){ last=0; return; }
     if(!last) last=ts;
@@ -178,9 +184,14 @@
     }
     requestAnimationFrame(loop);
   }
-  function applyOffset(){ script.style.transform=`translateY(${-offset}px)`; }
+  // ВНИМАНИЕ: при зеркале по Y двигаем текст противоположным знаком,
+  // чтобы визуально он шёл «вверх».
+  function applyOffset(){
+    const y = isMirrored() ? (offset) : (-offset);
+    script.style.transform=`translate3d(0,${y}px,0)`;
+  }
 
-  // SR (по словам)
+  // SR
   function initSR(){
     if(!SR) return null;
     const r=new SR(); r.continuous=true; r.interimResults=true; r.lang='ru-RU';
@@ -215,9 +226,8 @@
     offset += delta; applyOffset();
   }
 
-  // VAD (по голосовой активности)
+  // VAD
   async function startVAD(){
-    if(vadOn) return;
     if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){ note('VAD недоступен'); return; }
     try{
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -229,9 +239,7 @@
       source.connect(analyser);
       vadOn=true; btnMic.classList.add('primary'); note('Микрофон (VAD) включён');
       runVAD();
-    }catch(e){
-      note('Нет доступа к микрофону (нужно https и разрешение)');
-    }
+    }catch(e){ note('Нет доступа к микрофону (нужно https и разрешение)'); }
   }
   function stopVAD(){
     vadOn=false; voiceActive=false;
@@ -239,22 +247,20 @@
     try{ mediaStream?.getTracks().forEach(t=>t.stop()); }catch{}
     try{ audioCtx?.close(); }catch{}
     mediaStream=null; audioCtx=null; analyser=null;
-    btnMic.classList.remove('primary');
-    note('Микрофон выключен');
+    btnMic.classList.remove('primary'); note('Микрофон выключен');
   }
   function runVAD(){
     const buf = new Uint8Array(analyser.fftSize);
-    let smooth = 0;
+    let smooth=0;
     const tick=()=>{
-      if(!vadOn) return;
+      if(!analyser||!vadOn) return;
       analyser.getByteTimeDomainData(buf);
-      let sum=0;
-      for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum += v*v; }
-      const rms = Math.sqrt(sum/buf.length);
+      let sum=0; for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum+=v*v; }
+      const rms=Math.sqrt(sum/buf.length);
       smooth = smooth*0.9 + rms*0.1;
       if(!voiceActive && smooth>VAD_ON) voiceActive=true;
       else if(voiceActive && smooth<VAD_OFF) voiceActive=false;
-      vadRaf = requestAnimationFrame(tick);
+      vadRaf=requestAnimationFrame(tick);
     };
     tick();
   }
@@ -296,10 +302,15 @@
     if(playing){ document.body.classList.add('reading'); requestAnimationFrame(loop); note('Идёт прокрутка'); } else note('Пауза'); };
   btnReset.onclick=()=>{ playing=false; btnPlay.textContent='Старт'; offset=0; applyOffset(); currentWord=0; highlight(); note('В начало'); };
   btnRead.onclick=()=> document.body.classList.toggle('reading');
-  chkMirror.onchange=()=> viewer.classList.toggle('mirror', chkMirror.checked);
+
+  chkMirror.onchange=()=>{
+    viewer.classList.toggle('mirror', chkMirror.checked);
+    localStorage.setItem('tp_mirror', chkMirror.checked ? '1' : '0');
+    applyOffset(); // пересчитать знак движения
+  };
 
   btnMic.onclick=()=>{
-    if(micMode==='sr' && SR){
+    if(micModeSel.value==='sr' && SR){
       if(!recognition) recognition = initSR();
       if(!recogOn){
         try{ recognition.start(); recogOn=true; btnMic.classList.add('primary'); note('Микрофон (SR) включён'); }
@@ -318,16 +329,29 @@
   speedVal.addEventListener('input', onSpeedInput);
   speedVal.addEventListener('blur', onSpeedBlur);
 
+  // Восстановление (если раньше сохранял зеркало — уважаем его; иначе по умолчанию «вкл»)
   (function(){
     const savedT=localStorage.getItem('tp_script_simple'); if(savedT){ src.value=savedT; render(savedT); }
     const f100=Number(localStorage.getItem('tp_font100')); if(Number.isInteger(f100)&&f100>=1&&f100<=100){ lastFont100=f100; }
     const s100=Number(localStorage.getItem('tp_speed100')); if(Number.isInteger(s100)&&s100>=1&&s100<=100){ lastSpeed100=s100; }
-    fontVal.value=String(lastFont100); speedVal.value=String(lastSpeed100);
-    applyFontNow(); note('Готово');
+    applyFontNow();
+
+    const mSaved = localStorage.getItem('tp_mirror');
+    const useMirror = (mSaved===null) ? true : (mSaved==='1');
+    chkMirror.checked = useMirror;
+    viewer.classList.toggle('mirror', useMirror);
+    applyOffset();
+
+    if(!src.value){
+      const demo=`Демо. По умолчанию зеркало по X и Y включено.
+Вставь длинный текст, «Загрузить текст», затем «Старт».
+Говоришь — VAD может вести/останавливать ленту (если включишь «Следить по микрофону» и 🎤).`;
+      src.value=demo; render(demo);
+    }
   })();
 
   function stopAllMic(){
-    if(recogOn){ try{ recognition.stop(); }catch{} recogOn=false; }
+    try{ if(recogOn) recognition.stop(); }catch{}
     if(vadOn) stopVAD();
     btnMic.classList.remove('primary');
   }
